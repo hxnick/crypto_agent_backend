@@ -1,4 +1,3 @@
-sudo bash -lc 'cat > /root/crypto_agent_backend/app/main.py << "PY"
 import os, json, time, pathlib
 from typing import List
 from fastapi import FastAPI, HTTPException
@@ -40,43 +39,6 @@ def fetch_ohlcv_df(ex, symbol: str, tf: str, limit: int) -> pd.DataFrame:
 def health():
     return {"ok": True, "ts": int(time.time())}
 
-@app.post("/kline")
-def kline(q: KlineQuery):
-    cache_key = f"k:{q.exchange}:{q.symbol}:{q.tf}:{q.limit}"
-    hit = r.get(cache_key)
-    if hit:
-        return json.loads(hit)
-    try:
-        ex = get_exchange(q.exchange, _proxies())
-        df = fetch_ohlcv_df(ex, q.symbol, q.tf, q.limit)
-        payload = df.reset_index().to_dict(orient="records")
-        r.setex(cache_key, 30, json.dumps(payload))
-        return payload
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-@app.post("/snapshot")
-def snapshot(q: SnapshotQuery):
-    res = []
-    try:
-        ex = get_exchange(q.exchange, _proxies())
-        tickers = ex.fetch_tickers()
-        for sym in q.symbols:
-            t = tickers.get(sym)
-            if not t: continue
-            res.append({
-                "symbol": sym,
-                "last": t.get("last"),
-                "bid": t.get("bid"),
-                "ask": t.get("ask"),
-                "baseVolume": t.get("baseVolume"),
-                "quoteVolume": t.get("quoteVolume"),
-                "info": t.get("info", {})
-            })
-        return res
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
 @app.post("/screen/daily")
 def screen_daily(q: ScreenDailyQuery):
     try:
@@ -116,80 +78,3 @@ def screen_daily(q: ScreenDailyQuery):
         return {"topn": scored, "bench": "BTC/USDT", "exchange": q.exchange}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-# —— 持仓存取与风控 —— #
-def _read_holdings() -> list[dict]:
-    if not HOLDINGS_FILE.exists():
-        return []
-    try:
-        return json.loads(HOLDINGS_FILE.read_text("utf-8"))
-    except Exception:
-        return []
-
-def _write_holdings(items: list[dict]):
-    HOLDINGS_FILE.write_text(json.dumps(items, ensure_ascii=False, indent=2), "utf-8")
-
-@app.get("/holdings")
-def get_holdings():
-    return {"items": _read_holdings()}
-
-@app.post("/holdings")
-def set_holdings(items: List[Holding]):
-    data = [i.model_dump() for i in items]
-    _write_holdings(data)
-    return {"ok": True, "count": len(data)}
-
-@app.get("/risk/scan")
-def risk_scan():
-    items = _read_holdings()
-    if not items:
-        return {"items": [], "note": "no holdings"}
-    ex = get_exchange("okx", _proxies())
-    tickers = ex.fetch_tickers()
-    adv = []
-    for h in items:
-        sym = h.get("symbol")
-        entry = float(h.get("entry_price", 0))
-        qty = float(h.get("qty", 0))
-        slp = float(h.get("stop_loss_pct", 8.0))
-        tpp = float(h.get("take_profit_pct", 12.0))
-        try:
-            t = tickers.get(sym) or {}
-            last = t.get("last") or ex.fetch_ticker(sym).get("last")
-            df = fetch_ohlcv_df(ex, sym, "1h", 200)
-            ma50 = df["close"].rolling(50).mean().iloc[-1]
-            ma200 = df["close"].rolling(200).mean().iloc[-1] if len(df) >= 200 else None
-            sl_price = entry * (1 - slp / 100.0)
-            tp_price = entry * (1 + tpp / 100.0)
-            change_pct = round((last - entry) / entry * 100, 2) if (last and entry) else None
-
-            hints, action = [], "HOLD"
-            if last <= sl_price:
-                hints.append(f"触发止损({slp}%)")
-                action = "SELL"
-            elif last >= tp_price:
-                hints.append(f"达到止盈({tpp}%)，建议分批减仓")
-                action = "TAKE_PROFIT"
-            if ma50 and last < ma50:
-                hints.append(f"跌破MA50≈{ma50:.4f}")
-                if action == "HOLD": action = "REDUCE"
-            if ma200 and last < ma200:
-                hints.append(f"低于MA200≈{ma200:.4f}")
-                if action in ["HOLD","REDUCE"]: action = "EXIT_PARTIAL"
-
-            adv.append({
-                "symbol": sym,
-                "entry_price": entry,
-                "last": last,
-                "stop_loss_price": round(sl_price, 6),
-                "take_profit_price": round(tp_price, 6),
-                "pnl_pct": change_pct,
-                "ma50": round(ma50, 6) if ma50 else None,
-                "ma200": round(ma200, 6) if ma200 else None,
-                "action_hint": action,
-                "notes": "；".join(hints) if hints else "趋势未变，继续持有/观察",
-            })
-        except Exception as e:
-            adv.append({"symbol": sym, "error": str(e)})
-    return {"items": adv}
-PY'

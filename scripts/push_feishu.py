@@ -1,8 +1,7 @@
-sudo bash -lc 'cat > /root/crypto_agent_backend/scripts/push_feishu.py << "PY"
 import os, requests, json
 
 WEBHOOK = os.getenv("FEISHU_WEBHOOK")
-API_BASE = os.getenv("DATA_API", "http://localhost:8000")
+API_BASE = os.getenv("DATA_API", "http://127.0.0.1:8000")
 
 def main():
     payload = {"symbols": None, "exchange": "okx", "topn": 5}
@@ -19,6 +18,7 @@ def main():
         action = it.get("action") or "建议观察"
         reason = it.get("reason") or ""
         spread_text = f"{spread}%" if spread is not None else "—"
+
         md_lines.append(
             f"{i}. {it['symbol']}\n"
             f"   综合分数：{score}（趋势{tscore}，量能{vscore}，强度{rscore}）\n"
@@ -46,4 +46,3 @@ if __name__ == "__main__":
     if not WEBHOOK:
         raise SystemExit("FEISHU_WEBHOOK not set")
     main()
-PY'

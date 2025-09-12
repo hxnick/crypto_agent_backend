@@ -1,6 +1,6 @@
-sudo bash -lc 'cat > /root/crypto_agent_backend/app/scoring.py << "PY"
 import pandas as pd
 from .indicators import ma, rsi, atr
+from .config import settings
 
 # 打分权重
 class FactorWeights:
@@ -70,8 +70,39 @@ def total_score(symbol: str, df: pd.DataFrame, bench: pd.DataFrame | None) -> di
         "score_onchain": s_onc,
     }
 
-# —— 新增：中文操作建议 —— #
-def decide_action_cn(df: pd.DataFrame, score_total: float, avg_spread_pct: float | None) -> tuple[str, str]:
+# —— 三档风格参数 —— #
+def _thresholds(mode: str) -> dict:
+    m = (mode or "balanced").lower()
+    if m == "conservative":
+        return {
+            "buy_min_score": 75,
+            "breakout_min_score": 85,
+            "breakout_window": 30,
+            "chase_block_ret7": 0.25,  # 近7根涨幅≥25%则不追
+            "spread_max_pct": 0.5,
+            "need_ma200": True,        # 价格需优于MA200
+        }
+    if m == "aggressive":
+        return {
+            "buy_min_score": 65,
+            "breakout_min_score": 75,
+            "breakout_window": 20,
+            "chase_block_ret7": 0.50,
+            "spread_max_pct": 1.0,
+            "need_ma200": False,       # 不强制要求MA200
+        }
+    # balanced
+    return {
+        "buy_min_score": 70,
+        "breakout_min_score": 80,
+        "breakout_window": 25,
+        "chase_block_ret7": 0.35,
+        "spread_max_pct": 0.7,
+        "need_ma200": False,          # 优先，但不强制
+    }
+
+# —— 中文操作建议（支持三档风格） —— #
+def decide_action_cn(df: pd.DataFrame, score_total: float, avg_spread_pct: float | None, mode: str | None = None) -> tuple[str, str]:
     """
     返回 (action_cn, reason_cn)
     action_cn ∈ {"突破买点", "建议买入", "建议观察", "建议回避"}
@@ -79,42 +110,52 @@ def decide_action_cn(df: pd.DataFrame, score_total: float, avg_spread_pct: float
     if df is None or len(df) < 60:
         return "建议观察", "样本不足，等待更多K线"
 
+    cfg = _thresholds(mode or getattr(settings, "STRATEGY_MODE", "balanced"))
+
     close = df["close"]
     last = float(close.iloc[-1])
     ma50 = float(close.rolling(50).mean().iloc[-1])
     ma200 = float(close.rolling(200).mean().iloc[-1]) if len(close) >= 200 else None
 
-    # 近7根K线（约近7小时，按1h周期）涨幅，防止追高
+    # 近7根涨幅（1h周期下约近7小时）——防追高
     try:
         ret7 = float((close.iloc[-1] - close.iloc[-7]) / close.iloc[-7]) if len(close) >= 7 else 0.0
     except Exception:
         ret7 = 0.0
 
-    # 近30根内是否突破前高（略加 0.1% 过滤噪点）
+    # 是否突破“阶段高点”
     try:
-        win = 30 if len(close) > 30 else max(5, len(close) - 1)
+        win = cfg["breakout_window"]
+        if len(close) <= win:
+            win = max(5, len(close) - 1)
         prev_max = float(close.iloc[-(win+1):-1].max()) if len(close) > win else float(close.max())
-        is_breakout = last > prev_max * 1.001
+        is_breakout = last > prev_max * 1.001  # +0.1%容差
     except Exception:
         is_breakout = False
 
-    # 点差太大 → 回避
-    if avg_spread_pct is not None and avg_spread_pct > 0.5:
+    # 点差过大 → 回避
+    if avg_spread_pct is not None and avg_spread_pct > cfg["spread_max_pct"]:
         return "建议回避", f"点差偏大（≈{avg_spread_pct:.2f}%），交易成本高"
 
     above_ma50 = last >= ma50 if ma50 else False
     above_ma200 = (ma200 is not None and last >= ma200) if ma200 else False
 
-    if score_total >= 85 and is_breakout and above_ma50:
-        return "突破买点", "突破阶段高点且量能/强度良好，短期机会"
+    # 突破买点（高分+突破+至少站稳MA50）
+    if score_total >= cfg["breakout_min_score"] and is_breakout and above_ma50:
+        if cfg["need_ma200"] and not above_ma200 and ma200 is not None:
+            pass  # 若保守档要求MA200，则继续往下判
+        else:
+            return "突破买点", "突破阶段高点且量能/强度良好，短期机会"
 
-    if score_total >= 75 and above_ma50 and (above_ma200 or ma200 is None):
-        if ret7 >= 0.25:
+    # 建议买入（高分+均线结构正向）
+    if score_total >= cfg["buy_min_score"] and above_ma50 and (above_ma200 or (not cfg["need_ma200"]) or ma200 is None):
+        if ret7 >= cfg["chase_block_ret7"]:
             return "建议观察", "短期涨幅较大，谨慎追高，等待回踩确认"
         return "建议买入", "趋势健康、价格站稳关键均线，可小仓位试探"
 
+    # 中性：建议观察
     if score_total >= 60:
         return "建议观察", "趋势待确认或量能不足，继续跟踪"
 
+    # 其它：建议回避
     return "建议回避", "分数偏低或趋势走弱，暂不参与"
-PY'
