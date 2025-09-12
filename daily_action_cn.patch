@@ -1,0 +1,191 @@
+diff --git a/app/scoring.py b/app/scoring.py
+index 2a2b3f1..b9dd7a4 100644
+--- a/app/scoring.py
++++ b/app/scoring.py
+@@ -1,6 +1,7 @@
+ import pandas as pd
+ from .indicators import ma, rsi, atr
+ 
++# 评分：保持不变
+ class FactorWeights:
+     TREND = 0.30
+     VOLUME = 0.20
+@@ -45,3 +46,79 @@ def total_score(symbol: str, df: pd.DataFrame, bench: pd.DataFrame | None) -> di
+     return {
+         "score_total": round(total, 2),
+         "score_trend": s_trend,
+         "score_volume": s_vol,
+         "score_rel_strength": s_rel,
+         "score_catalyst": s_cat,
+         "score_onchain": s_onc,
+     }
++
++# ===== 新增：根据分数 / 均线 / 涨幅 / 点差 给出“中文操作建议” =====
++def decide_action_cn(df: pd.DataFrame,
++                     score_total: float,
++                     avg_spread_pct: float | None) -> tuple[str, str]:
++    """
++    返回 (action_cn, reason_cn)
++    action_cn ∈ {"突破买点", "建议买入", "建议观察", "建议回避"}
++    """
++    if df is None or len(df) < 60:
++        return "建议观察", "样本不足，等待更多K线"
++
++    close = df["close"]
++    last = float(close.iloc[-1])
++    ma50 = float(close.rolling(50).mean().iloc[-1])
++    ma200 = float(close.rolling(200).mean().iloc[-1]) if len(df) >= 200 else None
++
++    # 近7日涨幅（防追高）
++    try:
++        ret7 = float((close.iloc[-1] - close.iloc[-7]) / close.iloc[-7]) if len(close) >= 7 else 0.0
++    except Exception:
++        ret7 = 0.0
++
++    # 突破：与过去30根K线高点比较（不含当前K线）
++    try:
++        win = 30 if len(close) > 30 else max(5, len(close) - 1)
++        prev_max = float(close.iloc[-(win+1):-1].max()) if len(close) > win else float(close.max())
++        is_breakout = last > prev_max * 1.001  # 略加阈值，避免噪点
++    except Exception:
++        is_breakout = False
++
++    # 点差过滤：>0.5% 判为回避（流动性/交易成本过高）
++    if avg_spread_pct is not None and avg_spread_pct > 0.5:
++        return "建议回避", f"点差偏大（≈{avg_spread_pct:.2f}%），交易成本高"
++
++    # 高分与趋势共振
++    above_ma50 = last >= ma50 if ma50 else False
++    above_ma200 = (ma200 is not None and last >= ma200) if ma200 else False
++
++    # 明确的突破买点
++    if score_total >= 85 and is_breakout and above_ma50:
++        return "突破买点", "突破阶段高点且量能/强度良好，短期机会"
++
++    # 建议买入：分数高+均线结构正向
++    if score_total >= 75 and above_ma50 and (above_ma200 or ma200 is None):
++        if ret7 >= 0.25:
++            return "建议观察", "短期涨幅较大，谨慎追高，等待回踩确认"
++        return "建议买入", "趋势健康、价格站稳关键均线，可小仓位试探"
++
++    # 中性：建议观察
++    if score_total >= 60:
++        return "建议观察", "趋势待确认或量能不足，继续跟踪"
++
++    # 其它：建议回避
++    return "建议回避", "分数偏低或趋势走弱，暂不参与"
+diff --git a/app/main.py b/app/main.py
+index 8a6d9d2..b3c4b6f 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -16,7 +16,7 @@ from .models import KlineQuery, SnapshotQuery, ScreenDailyQuery, Holding
+ from .config import settings
+ from .exchanges import get_exchange
+-from .scoring import total_score
++from .scoring import total_score, decide_action_cn
+ 
+ DATA_DIR = pathlib.Path("/data")
+ DATA_DIR.mkdir(parents=True, exist_ok=True)
+@@ -103,6 +103,7 @@ def screen_daily(q: ScreenDailyQuery):
+         for sym in candidates:
+             try:
+                 df = fetch_ohlcv_df(ex, sym, "1h", 500)
+                 s = total_score(sym, df, bench_df)
+                 avg_spread = None
+                 t = tick.get(sym, {})
+                 bid, ask = t.get("bid"), t.get("ask")
+                 if bid and ask and ask > 0:
+                     avg_spread = round((ask - bid) / ask * 100, 4)
+-                item = {
++                action_cn, reason_cn = decide_action_cn(df, s["score_total"], avg_spread)
++                item = {
+                     "symbol": sym,
+                     "exchange": q.exchange,
+                     "avg_spread_pct": avg_spread,
+                     **s,
++                    "action": action_cn,
++                    "reason": reason_cn,
+                 }
+                 scored.append(item)
+             except Exception:
+                 continue
+         scored = sorted(scored, key=lambda x: x["score_total"], reverse=True)[: q.topn]
+         return {"topn": scored, "bench": "BTC/USDT", "exchange": q.exchange}
+diff --git a/scripts/push_feishu.py b/scripts/push_feishu.py
+index 9d7e8b0..f2f9131 100644
+--- a/scripts/push_feishu.py
++++ b/scripts/push_feishu.py
+@@ -1,31 +1,49 @@
+-import os, requests, json
++import os, requests, json
+ 
+ WEBHOOK = os.getenv("FEISHU_WEBHOOK")
+ API_BASE = os.getenv("DATA_API", "http://localhost:8000")
+ 
+ def main():
+-    payload = {"symbols": None, "exchange": "okx", "topn": 5}
+-    res = requests.post(f"{API_BASE}/screen/daily", json=payload, timeout=60).json()
+-    items = res.get("topn", [])
+-
+-    md_lines = ["**今日候选 Top 5**\\n"]
+-    for i, it in enumerate(items, 1):
+-        md_lines.append(
+-            f"{i}. {it['symbol']}  分数:{it['score_total']}  趋势:{int(it['score_trend'])}  量能:{int(it['score_volume'])}  RS:{int(it['score_rel_strength'])}  点差:{it['avg_spread_pct']}%"
+-        )
+-
+-    card = {
+-      "msg_type": "interactive",
+-      "card": {
+-        "config": {"wide_screen_mode": True},
+-        "header": {"title": {"tag": "plain_text", "content": "AI Agent - 每日候选"}},
+-        "elements": [
+-          {"tag": "div", "text": {"tag": "lark_md", "content": "\\n".join(md_lines)}},
+-          {"tag": "hr"},
+-          {"tag": "note", "elements": [{"tag": "lark_md", "content": "*非投资建议，谨慎参与*"}]}
+-        ]
+-      }
+-    }
+-
+-    resp = requests.post(WEBHOOK, data=json.dumps(card), headers={"Content-Type":"application/json"})
+-    print(resp.status_code, resp.text)
++    payload = {"symbols": None, "exchange": "okx", "topn": 5}
++    res = requests.post(f"{API_BASE}/screen/daily", json=payload, timeout=60).json()
++    items = res.get("topn", [])
++
++    md_lines = ["**今日候选 Top 5**\\n"]
++    for i, it in enumerate(items, 1):
++        score = it.get("score_total")
++        tscore = int(it.get("score_trend", 0))
++        vscore = int(it.get("score_volume", 0))
++        rscore = int(it.get("score_rel_strength", 0))
++        spread = it.get("avg_spread_pct")
++        action = it.get("action") or "建议观察"
++        reason = it.get("reason") or ""
++        spread_text = f"{spread}%" if spread is not None else "—"
++        md_lines.append(
++            f"{i}. {it['symbol']}\\n"
++            f"   综合分数：{score}（趋势{tscore}，量能{vscore}，强度{rscore}）\\n"
++            f"   操作建议：**{action}**\\n"
++            f"   理由：{reason}；点差：{spread_text}"
++        )
++
++    card = {
++        "msg_type": "interactive",
++        "card": {
++            "config": {"wide_screen_mode": True},
++            "header": {"title": {"tag": "plain_text", "content": "每日候选（含操作建议）"}},
++            "elements": [
++                {"tag": "div", "text": {"tag": "lark_md", "content": "\\n".join(md_lines)}},
++                {"tag": "hr"},
++                {"tag": "note", "elements": [{"tag": "lark_md", "content": "*非投资建议，谨慎参与*"}]}
++            ]
++        }
++    }
++
++    resp = requests.post(WEBHOOK, data=json.dumps(card), headers={"Content-Type":"application/json"})
++    print(resp.status_code, resp.text)
+ 
+ if __name__ == "__main__":
+     if not WEBHOOK:
+         raise SystemExit("FEISHU_WEBHOOK not set")
+     main()
