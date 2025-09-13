@@ -1,15 +1,41 @@
-version: "3.9"
 services:
   api:
     build: .
-    image: crypto-agent-backend:0.2.0
-    ports: ["8000:8000"]
-    env_file: [".env"]
-    depends_on: ["redis"]
-    volumes:
-      - ./data:/data
+    # 如果你是用镜像而不是本地构建，改成：
+    # image: crypto-agent-backend:0.2.0
     restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+    # 如果你有本地代码挂载需求，再开启：
+    # volumes:
+    #   - ./app:/app/app
+
   redis:
     image: redis:7-alpine
-    ports: ["6379:6379"]
     restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+  caddy:
+    image: caddy:2.7
+    container_name: crypto_agent_caddy
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - caddy_logs:/var/log/caddy
+
+volumes:
+  caddy_data:
+  caddy_config:
+  caddy_logs:

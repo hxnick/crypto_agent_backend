@@ -1,0 +1,76 @@
+{
+  "symbols": {
+    "YGG/USDT": {
+      "stop_loss_price": 0.19596,
+      "take_profit_price": 0.23856,
+      "ma50": 0.196124,
+      "ma200": 0.16257,
+      "last": 0.2301,
+      "pnl_pct": 8.03,
+      "ts": "2025-09-13 17:30:03"
+    },
+    "TON/USDT": {
+      "stop_loss_price": 2.95136,
+      "take_profit_price": 3.59296,
+      "ma50": 3.20132,
+      "ma200": 3.126075,
+      "last": 3.245,
+      "pnl_pct": 1.15,
+      "ts": "2025-09-13 17:30:03"
+    },
+    "TRB/USDT": {
+      "stop_loss_price": 34.7829,
+      "take_profit_price": 42.3444,
+      "ma50": 37.4336,
+      "ma200": 35.76795,
+      "last": 38.63,
+      "pnl_pct": 2.18,
+      "ts": "2025-09-13 17:30:03"
+    },
+    "ATH/USDT": {
+      "stop_loss_price": 0.053065,
+      "take_profit_price": 0.064601,
+      "ma50": 0.052474,
+      "ma200": 0.040217,
+      "last": 0.05293,
+      "pnl_pct": -8.23,
+      "ts": "2025-09-13 15:50:02"
+    },
+    "FLM/USDT": {
+      "stop_loss_price": 0.035604,
+      "take_profit_price": 0.043344,
+      "ma50": 0.032433,
+      "ma200": 0.029766,
+      "last": 0.03579,
+      "pnl_pct": -7.52,
+      "ts": "2025-09-13 17:30:03"
+    },
+    "MOODENG/USDT": {
+      "stop_loss_price": 0.187496,
+      "take_profit_price": 0.228256,
+      "ma50": 0.164262,
+      "ma200": 0.144174,
+      "last": 0.22924,
+      "pnl_pct": 12.48,
+      "ts": "2025-09-13 17:30:03"
+    },
+    "IMX/USDT": {
+      "stop_loss_price": 0.609868,
+      "take_profit_price": 0.742448,
+      "ma50": 0.604732,
+      "ma200": 0.549106,
+      "last": 0.672,
+      "pnl_pct": 1.37,
+      "ts": "2025-09-13 17:30:03"
+    },
+    "VINE/USDT": {
+      "stop_loss_price": 0.080408,
+      "take_profit_price": 0.097888,
+      "ma50": 0.074454,
+      "ma200": 0.068144,
+      "last": 0.0902,
+      "pnl_pct": 3.2,
+      "ts": "2025-09-13 17:30:03"
+    }
+  }
+}

@@ -1,0 +1,4 @@
+crystal.zxszhcs.cn {
+	encode zstd gzip
+	reverse_proxy api:8000
+}
