@@ -1,0 +1,12 @@
+{
+  "positions": [
+    {"symbol":"XAUT/USDT","buy_price":3646.1687,"qty":0.0554},
+    {"symbol":"AVAX/USDT","buy_price":29.79,"qty":2.077},
+    {"symbol":"ATH/USDT","buy_price":0.063,"qty":880.58},
+    {"symbol":"BNB/USDT","buy_price":956.5623,"qty":331.87}, 
+    {"symbol":"IMX/USDT","buy_price":0.6974,"qty":51.36},
+    {"symbol":"MOODENG/USDT","buy_price":0.185,"qty":610.65},
+    {"symbol":"EIGEN/USDT","buy_price":1.6111,"qty":58.297},
+    {"symbol":"BNB/USDT","buy_price":957.99,"qty":0.073}
+  ]
+}
